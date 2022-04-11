@@ -12,3 +12,5 @@
 # Installation
 ### npm install
 ### node p2p.js
+
+## Checkout on [medium] (https://abhishek-chauhan.medium.com/e65dfc40479e) for detailed instructions
