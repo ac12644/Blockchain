@@ -1,4 +1,4 @@
-# Create your own blockchain P2P network with Node.js
+# Create your own blockchain P2P network with Node.js🔥🔥🔥
 
 # Topics Covered
   * Creating a basic P2P network
@@ -13,4 +13,4 @@
 ### npm install
 ### node p2p.js
 
-## Checkout on [medium] (https://abhishek-chauhan.medium.com/e65dfc40479e) for detailed instructions
+## Checkout on [medium](https://abhishek-chauhan.medium.com/e65dfc40479e) for detailed instructions.
