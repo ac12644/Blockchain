@@ -2,7 +2,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/ac12644/Blockchain">
-    <img src="images/blockchain.svg" alt="Logo" width="80" height="80">
+    <img src="blockchain.svg" alt="Logo" width="80" height="80">
   </a>
 
   <h3 align="center">Blockchain</h3>
