@@ -21,14 +21,26 @@
   <summary>Steps done</summary>
   <ol>
     <li>
-      <a>Creating a basic P2P network</a>
+     <a>Creating a basic P2P network</a>
+    </li>
+    <li>
      <a>Sending and receiving blocks</a>
+    </li>
+    <li>
      <a>Registering miners and creating new blocks</a>
+    </li>
+    <li>
      <a>Setting up a name-value database, LevelDB</a>
+    </li>
+    <li>
      <a>Creating a private-public wallet</a>
+    </li>
+    <li>
      <a>Creating an API</a>
+    </li>
+    <li>
      <a>Creating a command-line interface</a>
-   </li>
+    </li>
   </ol>
 </details>
 
