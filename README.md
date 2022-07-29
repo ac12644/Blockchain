@@ -8,7 +8,7 @@
   <h3 align="center">Blockchain</h3>
 
   <p align="center">
-    Create your own blockchain P2P network with Node.js🔥
+    Create blockchain with Node.js🔥
     <br />
     <a href="https://abhishek-chauhan.medium.com/e65dfc40479e"><strong>Explore the article on Medium »</strong></a>
   </p>
