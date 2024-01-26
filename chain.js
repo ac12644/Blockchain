@@ -1,6 +1,7 @@
 const path = require("path");
 const Block = require("./block.js").Block;
 const BlockHeader = require("./block.js").BlockHeader;
+const verifyTransaction = require("./transaction.js").verifyTransaction;
 const moment = require("moment");
 const CryptoJS = require("crypto-js");
 const { Level } = require("level");
@@ -37,6 +38,7 @@ const isTimestampValid = (newBlock, blockchain) => {
   );
 };
 
+// proof of work
 const calculateHash = (
   index,
   previousBlockHeader,
@@ -48,27 +50,6 @@ const calculateHash = (
   return CryptoJS.SHA256(
     index + previousBlockHeader + merkleRoot + time + nBits + nonce
   ).toString();
-};
-
-const proofOfWork = (blockHeader) => {
-  let hash;
-  let nonce = 0;
-  do {
-    nonce++;
-    hash = calculateHash(
-      blockHeader.version,
-      blockHeader.previousBlockHeader,
-      blockHeader.merkleRoot,
-      blockHeader.time,
-      blockHeader.nBits,
-      nonce
-    );
-  } while (
-    hash.substring(0, blockHeader.nBits) !==
-    Array(blockHeader.nBits + 1).join("0")
-  );
-
-  return nonce;
 };
 
 let createDb = async (peerId) => {
@@ -162,6 +143,11 @@ const generateNextBlock = (txns) => {
     4,
     nonce
   );
+  for (const txn of txns) {
+    if (!verifyTransaction(txn, blockchain)) {
+      throw new Error("Invalid transaction");
+    }
+  }
   const newBlock = new Block(blockHeader, nextIndex, txns);
   blockchain.push(newBlock);
   storeBlock(newBlock);
