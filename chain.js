@@ -7,6 +7,15 @@ const { Level } = require("level");
 const fs = require("fs");
 
 let db;
+const MAX_TIME_DIFF = 120; // 120 seconds or 2 minutes
+
+const isTimestampValid = (newBlock, previousBlock) => {
+  return (
+    previousBlock.blockHeader.time - MAX_TIME_DIFF <=
+      newBlock.blockHeader.time &&
+    newBlock.blockHeader.time - MAX_TIME_DIFF <= moment().unix()
+  );
+};
 
 let createDb = async (peerId) => {
   let dir = path.join(__dirname, "db", peerId);
@@ -80,6 +89,9 @@ const generateNextBlock = (txns) => {
     nextTime
   );
   const newBlock = new Block(blockHeader, nextIndex, txns);
+  if (!isTimestampValid(newBlock, prevBlock)) {
+    throw new Error("Invalid timestamp for new block");
+  }
   blockchain.push(newBlock);
   storeBlock(newBlock);
   return newBlock;
