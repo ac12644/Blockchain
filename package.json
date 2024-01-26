@@ -13,9 +13,9 @@
     "express": "^4.17.3",
     "get-port": "5.1.1 --",
     "handlebars": "^4.7.7",
-    "level": "^8.0.0",
     "moment": "^2.29.2",
     "nopt": "^5.0.0",
+    "rocksdb": "^5.2.1",
     "save": "^2.4.0",
     "update-notifier": "^5.1.0"
   },

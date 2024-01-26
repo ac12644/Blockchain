@@ -4,7 +4,7 @@ const BlockHeader = require("./block.js").BlockHeader;
 const verifyTransaction = require("./transaction.js").verifyTransaction;
 const moment = require("moment");
 const CryptoJS = require("crypto-js");
-const { Level } = require("level");
+const rocksdb = require("rocksdb");
 const fs = require("fs");
 
 let db;
@@ -56,10 +56,16 @@ let createDb = async (peerId) => {
   let dir = path.join(__dirname, "db", peerId);
   try {
     await fs.promises.mkdir(dir, { recursive: true });
-    db = new Level(dir);
-    storeBlock(getGenesisBlock());
+    db = rocksdb(dir);
+    db.open((err) => {
+      if (err) {
+        console.error("Error opening RocksDB database:", err);
+      } else {
+        storeBlock(getGenesisBlock());
+      }
+    });
   } catch (err) {
-    console.error("Error creating database:", err);
+    console.error("Error creating database directory:", err);
   }
 };
 
@@ -117,6 +123,8 @@ let getBlock = (index) => {
 const blockchain = [getGenesisBlock()];
 
 const generateNextBlock = (txns) => {
+  txns = txns || []; // Default to an empty array if txns is not provided or is not an array
+
   const prevBlock = getLatestBlock(),
     prevMerkleRoot = prevBlock.blockHeader.merkleRoot;
   const nextIndex = prevBlock.index + 1,
@@ -143,11 +151,14 @@ const generateNextBlock = (txns) => {
     4,
     nonce
   );
+
+  // Verify transactions
   for (const txn of txns) {
     if (!verifyTransaction(txn, blockchain)) {
       throw new Error("Invalid transaction");
     }
   }
+
   const newBlock = new Block(blockHeader, nextIndex, txns);
   blockchain.push(newBlock);
   storeBlock(newBlock);
