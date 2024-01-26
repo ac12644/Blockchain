@@ -7,14 +7,68 @@ const { Level } = require("level");
 const fs = require("fs");
 
 let db;
-const MAX_TIME_DIFF = 120; // 120 seconds or 2 minutes
 
-const isTimestampValid = (newBlock, previousBlock) => {
+const MEDIAN_BLOCK_COUNT = 11;
+const FUTURE_TIMESTAMP_THRESHOLD = 7200; // 2 hours in seconds
+
+const calculateMedianTimestamp = (blockchain) => {
+  const blockCount = blockchain.length;
+  const medianIndex = Math.floor(MEDIAN_BLOCK_COUNT / 2);
+
+  let medianTimestamps = blockchain
+    .slice(Math.max(blockCount - MEDIAN_BLOCK_COUNT, 0)) // Get the last MEDIAN_BLOCK_COUNT blocks
+    .map((block) => block.blockHeader.time)
+    .sort((a, b) => a - b); // Sort timestamps
+
+  return medianTimestamps[medianIndex] || 0;
+};
+
+const isTimestampValid = (newBlock, blockchain) => {
+  if (blockchain.length < MEDIAN_BLOCK_COUNT) {
+    return true; // Not enough blocks for a median check
+  }
+
+  const medianTimestamp = calculateMedianTimestamp(blockchain);
+  const currentNodeTime = moment().unix();
+
   return (
-    previousBlock.blockHeader.time - MAX_TIME_DIFF <=
-      newBlock.blockHeader.time &&
-    newBlock.blockHeader.time - MAX_TIME_DIFF <= moment().unix()
+    newBlock.blockHeader.time > medianTimestamp &&
+    newBlock.blockHeader.time <= currentNodeTime + FUTURE_TIMESTAMP_THRESHOLD
   );
+};
+
+const calculateHash = (
+  index,
+  previousBlockHeader,
+  merkleRoot,
+  time,
+  nBits,
+  nonce
+) => {
+  return CryptoJS.SHA256(
+    index + previousBlockHeader + merkleRoot + time + nBits + nonce
+  ).toString();
+};
+
+const proofOfWork = (blockHeader) => {
+  let hash;
+  let nonce = 0;
+  do {
+    nonce++;
+    hash = calculateHash(
+      blockHeader.version,
+      blockHeader.previousBlockHeader,
+      blockHeader.merkleRoot,
+      blockHeader.time,
+      blockHeader.nBits,
+      nonce
+    );
+  } while (
+    hash.substring(0, blockHeader.nBits) !==
+    Array(blockHeader.nBits + 1).join("0")
+  );
+
+  return nonce;
 };
 
 let createDb = async (peerId) => {
@@ -47,8 +101,14 @@ let addBlock = (newBlock) => {
   if (
     prevBlock.index < newBlock.index &&
     newBlock.blockHeader.previousBlockHeader ===
-      prevBlock.blockHeader.merkleRoot
+      prevBlock.blockHeader.merkleRoot &&
+    isTimestampValid(newBlock, blockchain)
   ) {
+    // Add the timestamp validation check
+    blockchain.push(newBlock);
+    storeBlock(newBlock);
+  }
+  {
     blockchain.push(newBlock);
     storeBlock(newBlock); // When you generate a new block using the generateNextBlock method, you can now store the block in the LevelDB database
   }
@@ -78,20 +138,31 @@ const blockchain = [getGenesisBlock()];
 const generateNextBlock = (txns) => {
   const prevBlock = getLatestBlock(),
     prevMerkleRoot = prevBlock.blockHeader.merkleRoot;
-  (nextIndex = prevBlock.index + 1),
-    (nextTime = moment().unix()),
-    (nextMerkleRoot = CryptoJS.SHA256(1, prevMerkleRoot, nextTime).toString());
+  const nextIndex = prevBlock.index + 1,
+    nextTime = moment().unix();
+
+  let nonce = 0; // Start with a nonce of 0
+  let nextMerkleRoot, hash;
+
+  do {
+    nonce++;
+    nextMerkleRoot = CryptoJS.SHA256(
+      1,
+      prevMerkleRoot,
+      nextTime + nonce
+    ).toString();
+    hash = calculateHash(1, prevMerkleRoot, nextMerkleRoot, nextTime, 4, nonce); // Assuming a difficulty of 4 leading zeros
+  } while (hash.substring(0, 4) !== "0000");
 
   const blockHeader = new BlockHeader(
     1,
     prevMerkleRoot,
     nextMerkleRoot,
-    nextTime
+    nextTime,
+    4,
+    nonce
   );
   const newBlock = new Block(blockHeader, nextIndex, txns);
-  if (!isTimestampValid(newBlock, prevBlock)) {
-    throw new Error("Invalid timestamp for new block");
-  }
   blockchain.push(newBlock);
   storeBlock(newBlock);
   return newBlock;
