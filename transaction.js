@@ -8,7 +8,7 @@ const getBalance = (address, blockchain) => {
   return balance;
 };
 
-export const verifyTransaction = (transaction, blockchain) => {
+exports.verifyTransaction = (transaction, blockchain) => {
   // Check for the transaction structure
   if (
     !transaction.fromAddress ||
