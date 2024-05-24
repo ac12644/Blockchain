@@ -17,8 +17,8 @@
 
 
 <!-- TABLE OF CONTENTS -->
-<details>
-  <summary>Steps done</summary>
+
+## Steps done
   <ol>
     <li>
      <a>Creating a basic P2P network</a>
@@ -42,7 +42,7 @@
      <a>Creating a command-line interface</a>
     </li>
   </ol>
-</details>
+
 
 ## Getting Started
   ```sh
