@@ -52,9 +52,6 @@ const MessageType = {
 };
 
 const myPeerId = crypto.randomBytes(32);
-const myAddress = wallet.initWallet().publicKey;
-console.log("myPeerId:", myPeerId.toString("hex"));
-console.log("myWallet:", myAddress);
 
 // create a database once you start the code
 chain.createDb(myPeerId.toString("hex"));
@@ -89,6 +86,12 @@ const swarm = Swarm(config);
 
 (async () => {
   const port = await getPort();
+
+  const myWallet = await wallet.initWallet();
+  const myAddress = myWallet.address;
+
+  console.log("myPeerId:", myPeerId.toString("hex"));
+  console.log("myWallet:", myAddress);
 
   initHttpServer(port);
   swarm.listen(port);
