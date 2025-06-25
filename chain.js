@@ -1,3 +1,4 @@
+require("dotenv").config();
 const path = require("path");
 const Block = require("./block.js").Block;
 const BlockHeader = require("./block.js").BlockHeader;
@@ -7,29 +8,29 @@ const CryptoJS = require("crypto-js");
 const rocksdb = require("rocksdb");
 const fs = require("fs");
 
+const consensus = require("./consensus.js");
+
 let db;
 
 const MEDIAN_BLOCK_COUNT = 11;
 const FUTURE_TIMESTAMP_THRESHOLD = 7200; // 2 hours in seconds
+let blockchain = [];
 
-const calculateMedianTimestamp = (blockchain) => {
-  const blockCount = blockchain.length;
+const calculateMedianTimestamp = (chain) => {
+  const blockCount = chain.length;
   const medianIndex = Math.floor(MEDIAN_BLOCK_COUNT / 2);
 
-  let medianTimestamps = blockchain
-    .slice(Math.max(blockCount - MEDIAN_BLOCK_COUNT, 0)) // Get the last MEDIAN_BLOCK_COUNT blocks
+  let medianTimestamps = chain
+    .slice(Math.max(blockCount - MEDIAN_BLOCK_COUNT, 0))
     .map((block) => block.blockHeader.time)
-    .sort((a, b) => a - b); // Sort timestamps
+    .sort((a, b) => a - b);
 
   return medianTimestamps[medianIndex] || 0;
 };
 
-const isTimestampValid = (newBlock, blockchain) => {
-  if (blockchain.length < MEDIAN_BLOCK_COUNT) {
-    return true; // Not enough blocks for a median check
-  }
-
-  const medianTimestamp = calculateMedianTimestamp(blockchain);
+const isTimestampValid = (newBlock, chain) => {
+  if (chain.length < MEDIAN_BLOCK_COUNT) return true;
+  const medianTimestamp = calculateMedianTimestamp(chain);
   const currentNodeTime = moment().unix();
 
   return (
@@ -38,7 +39,6 @@ const isTimestampValid = (newBlock, blockchain) => {
   );
 };
 
-// proof of work
 const calculateHash = (
   index,
   previousBlockHeader,
@@ -52,24 +52,21 @@ const calculateHash = (
   ).toString();
 };
 
-let createDb = async (peerId) => {
-  let dir = path.join(__dirname, "db", peerId);
+const createDb = async (peerId) => {
+  const dir = path.join(__dirname, "db", peerId);
   try {
     await fs.promises.mkdir(dir, { recursive: true });
     db = rocksdb(dir);
     db.open((err) => {
-      if (err) {
-        console.error("Error opening RocksDB database:", err);
-      } else {
-        storeBlock(getGenesisBlock());
-      }
+      if (err) console.error("Error opening RocksDB database:", err);
+      else storeBlock(getGenesisBlock());
     });
   } catch (err) {
     console.error("Error creating database directory:", err);
   }
 };
 
-let getGenesisBlock = () => {
+const getGenesisBlock = () => {
   let blockHeader = new BlockHeader(
     1,
     null,
@@ -81,96 +78,105 @@ let getGenesisBlock = () => {
   return new Block(blockHeader, 0, null);
 };
 
-let getLatestBlock = () => blockchain[blockchain.length - 1];
+const getLatestBlock = () => blockchain[blockchain.length - 1];
 
-let addBlock = (newBlock) => {
-  let prevBlock = getLatestBlock();
+const addBlock = (newBlock) => {
+  const prevBlock = getLatestBlock();
   if (
     prevBlock.index < newBlock.index &&
     newBlock.blockHeader.previousBlockHeader ===
       prevBlock.blockHeader.merkleRoot &&
     isTimestampValid(newBlock, blockchain)
   ) {
-    // Add the timestamp validation check
     blockchain.push(newBlock);
     storeBlock(newBlock);
   }
-  {
-    blockchain.push(newBlock);
-    storeBlock(newBlock); // When you generate a new block using the generateNextBlock method, you can now store the block in the LevelDB database
-  }
 };
 
-// create a storeBlock method to store the new block
-let storeBlock = (newBlock) => {
-  db.put(newBlock.index, JSON.stringify(newBlock), function (err) {
+const storeBlock = (newBlock) => {
+  db.put(newBlock.index, JSON.stringify(newBlock), (err) => {
     if (err) console.error("Error storing block:", err);
     else console.log("--- Inserting block index: " + newBlock.index);
   });
 };
 
-let getDbBlock = (index, res) => {
+const getBlock = (index) => {
+  return blockchain[index] || null;
+};
+
+const getDbBlock = (index, res) => {
   db.get(index, function (err, value) {
     if (err) res.send(JSON.stringify(err));
     else res.send(value);
   });
 };
-let getBlock = (index) => {
-  if (blockchain.length - 1 >= index) return blockchain[index];
-  else return null;
-};
 
-const blockchain = [getGenesisBlock()];
+const isValidChain = (chainToValidate) => {
+  if (JSON.stringify(chainToValidate[0]) !== JSON.stringify(getGenesisBlock()))
+    return false;
 
-const generateNextBlock = (txns) => {
-  txns = txns || []; // Default to an empty array if txns is not provided or is not an array
-
-  const prevBlock = getLatestBlock(),
-    prevMerkleRoot = prevBlock.blockHeader.merkleRoot;
-  const nextIndex = prevBlock.index + 1,
-    nextTime = moment().unix();
-
-  let nonce = 0; // Start with a nonce of 0
-  let nextMerkleRoot, hash;
-
-  do {
-    nonce++;
-    nextMerkleRoot = CryptoJS.SHA256(
-      1,
-      prevMerkleRoot,
-      nextTime + nonce
-    ).toString();
-    hash = calculateHash(1, prevMerkleRoot, nextMerkleRoot, nextTime, 4, nonce); // Assuming a difficulty of 4 leading zeros
-  } while (hash.substring(0, 4) !== "0000");
-
-  const blockHeader = new BlockHeader(
-    1,
-    prevMerkleRoot,
-    nextMerkleRoot,
-    nextTime,
-    4,
-    nonce
-  );
-
-  // Verify transactions
-  for (const txn of txns) {
-    if (!verifyTransaction(txn, blockchain)) {
-      throw new Error("Invalid transaction");
+  for (let i = 1; i < chainToValidate.length; i++) {
+    const current = chainToValidate[i];
+    const previous = chainToValidate[i - 1];
+    if (
+      current.blockHeader.previousBlockHeader !==
+        previous.blockHeader.merkleRoot ||
+      !isTimestampValid(current, chainToValidate)
+    ) {
+      return false;
     }
   }
+  return true;
+};
 
-  const newBlock = new Block(blockHeader, nextIndex, txns);
+const replaceChain = (newChain) => {
+  if (isValidChain(newChain) && newChain.length > blockchain.length) {
+    console.log("Replacing chain with new longer valid chain");
+    blockchain = newChain;
+  }
+};
+
+const generateNextBlock = (txns = [], stakes = []) => {
+  const prevBlock = getLatestBlock();
+  const nextIndex = prevBlock.index + 1;
+  const nextTime = moment().unix();
+  const consensusMode = process.env.CONSENSUS_MODE || "pow";
+
+  let newBlock;
+  if (consensusMode === "pow") {
+    newBlock = consensus.generatePoWBlock(
+      prevBlock,
+      txns,
+      nextIndex,
+      nextTime,
+      blockchain
+    );
+  } else {
+    newBlock = consensus.generatePoSBlock(
+      prevBlock,
+      txns,
+      nextIndex,
+      nextTime,
+      blockchain,
+      stakes
+    );
+  }
+
   blockchain.push(newBlock);
   storeBlock(newBlock);
   return newBlock;
 };
 
-if (typeof exports != "undefined") {
-  exports.addBlock = addBlock;
-  exports.getBlock = getBlock;
-  exports.blockchain = blockchain;
-  exports.getLatestBlock = getLatestBlock;
-  exports.generateNextBlock = generateNextBlock;
-  exports.createDb = createDb;
-  exports.getDbBlock = getDbBlock;
-}
+blockchain = [getGenesisBlock()];
+
+module.exports = {
+  addBlock,
+  getBlock,
+  blockchain,
+  getLatestBlock,
+  generateNextBlock,
+  createDb,
+  getDbBlock,
+  isValidChain,
+  replaceChain,
+};

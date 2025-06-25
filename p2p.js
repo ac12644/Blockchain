@@ -1,273 +1,307 @@
-const crypto = require('crypto');
-const Swarm = require('discovery-swarm');
-const defaults = require('dat-swarm-defaults');
-const getPort = require('get-port');
-const chain =  require("./chain");
-const CronJob = require('cron').CronJob;
+require("dotenv").config();
+const crypto = require("crypto");
+const Swarm = require("discovery-swarm");
+const defaults = require("dat-swarm-defaults");
+const getPort = require("get-port");
+const chain = require("./chain");
+const CronJob = require("cron").CronJob;
 const express = require("express");
-const bodyParser = require('body-parser');
-const wallet = require('./wallet');
+const bodyParser = require("body-parser");
+const wallet = require("./wallet");
 
-// Set your variables to hold an object with the peers and connection sequence
+// ----- Consensus/Crypto Mode Info -----
+const consensusMode = process.env.CONSENSUS_MODE || "pow";
+const cryptoMode = process.env.CRYPTO_MODE || "secp256k1";
+
+console.log("===========================================");
+console.log("   Blockchain Node Starting...");
+console.log(
+  "   Consensus Mode:",
+  consensusMode === "pow" ? "Proof-of-Work (PoW)" : "Proof-of-Stake (PoS)"
+);
+console.log(
+  "   Crypto Algorithm:",
+  cryptoMode === "falcon"
+    ? "Falcon-512 (Post-Quantum)"
+    : "secp256k1 (Classic ECDSA)"
+);
+console.log("===========================================");
+
 const peers = {};
 let connSeq = 0;
 
-let channel = 'myBlockchain';
+const channel = "myBlockchain";
 let registeredMiners = [];
 let lastBlockMinedBy = null;
 
+// --- NEW: For PoS simulation ---
+let stakes = []; // [{ address, stake }]
+let myStake = 50 + Math.floor(Math.random() * 100); // Random stake for demo
 
-// define a message type to request and receive the latest block
-let MessageType = {
-    REQUEST_BLOCK: 'requestBlock',
-    RECEIVE_NEXT_BLOCK: 'receiveNextBlock',
-    RECEIVE_NEW_BLOCK: 'receiveNewBlock',
-    REQUEST_ALL_REGISTER_MINERS: 'requestAllRegisterMiners',
-    REGISTER_MINER: 'registerMiner'
+// Message types
+const MessageType = {
+  REQUEST_BLOCK: "requestBlock",
+  RECEIVE_NEXT_BLOCK: "receiveNextBlock",
+  RECEIVE_NEW_BLOCK: "receiveNewBlock",
+  REQUEST_ALL_REGISTER_MINERS: "requestAllRegisterMiners",
+  REGISTER_MINER: "registerMiner",
+  REQUEST_FULL_CHAIN: "requestFullChain",
+  RECEIVE_FULL_CHAIN: "receiveFullChain",
+  REQUEST_STAKES: "requestStakes",
+  RECEIVE_STAKES: "receiveStakes",
 };
 
 const myPeerId = crypto.randomBytes(32);
-console.log('myPeerId: ' + myPeerId.toString('hex'));
+const myAddress = wallet.initWallet().publicKey;
+console.log("myPeerId:", myPeerId.toString("hex"));
+console.log("myWallet:", myAddress);
 
 // create a database once you start the code
-chain.createDb(myPeerId.toString('hex'));
+chain.createDb(myPeerId.toString("hex"));
 
-
-// create a method called initHttpServer that will initiate the server and create the services
 let initHttpServer = (port) => {
-    let http_port = '80' + port.toString().slice(-2);
-    let app = express();
-    app.use(bodyParser.json());
+  let http_port = "80" + port.toString().slice(-2);
+  let app = express();
+  app.use(bodyParser.json());
 
-    //  Blocks service will be retrieving all of your blocks
-    app.get('/blocks', (req, res) => res.send(JSON.stringify( chain.blockchain )));
-
-    // getBlock service will be retrieving one block based on an index
-    app.get('/getBlock', (req, res) => {
-        let blockIndex = req.query.index;
-        res.send(chain.blockchain[blockIndex]);
-    });
-
-    //  getDBBlock service will be retrieving a LevelDB database entry based on an index
-    app.get('/getDBBlock', (req, res) => {
-        let blockIndex = req.query.index;
-        chain.getDbBlock(blockIndex, res);
-    });
-
-    //getWallet service will be utilizing the wallet.js file you created in the previous step and generate your public-private key pair
-    app.get('/getWallet', (req, res) => {
-        res.send(wallet.initWallet());
-    });
-    app.listen(http_port, () => console.log('Listening http on port: ' + http_port));
+  app.get("/blocks", (req, res) => res.send(JSON.stringify(chain.blockchain)));
+  app.get("/getBlock", (req, res) => {
+    let blockIndex = req.query.index;
+    res.send(chain.blockchain[blockIndex]);
+  });
+  app.get("/getDBBlock", (req, res) => {
+    let blockIndex = req.query.index;
+    chain.getDbBlock(blockIndex, res);
+  });
+  app.get("/getWallet", (req, res) => {
+    res.send(wallet.initWallet());
+  });
+  app.listen(http_port, () =>
+    console.log("Listening http on port:", http_port)
+  );
 };
 
-// generate a config object that holds your peer ID
+// Peer discovery config
 const config = defaults({
-    id: myPeerId,
+  id: myPeerId,
 });
-
-// initialize swarm library using config as object
 const swarm = Swarm(config);
-   
+
 (async () => {
-    // listen on the random port selected
-    const port = await getPort();
+  const port = await getPort();
 
-    initHttpServer(port); // call the initHttpServer
+  initHttpServer(port);
+  swarm.listen(port);
+  console.log("Listening port:", port);
 
-    swarm.listen(port);
-    console.log('Listening port: ' + port);
+  swarm.join(channel);
+  swarm.on("connection", (conn, info) => {
+    const seq = connSeq;
+    const peerId = info.id.toString("hex");
+    console.log(`Connected #${seq} to peer: ${peerId}`);
 
-    swarm.join(channel);
-    swarm.on('connection', (conn, info) => {
-        const seq = connSeq;
-        const peerId = info.id.toString('hex');
-        console.log(`Connected #${seq} to peer: ${peerId}`);
-        if (info.initiator) {
-            try {
-                // use setKeepAlive to ensure the network connection stays with other peers
-                conn.setKeepAlive(true, 600);
-            } catch (exception) {
-                console.log('exception', exception);
-            }
-        }
+    if (info.initiator) {
+      try {
+        conn.setKeepAlive(true, 600);
+      } catch (exception) {}
+    }
 
-        // Once you receive a data message on the P2P network, you parse the data using JSON.parse
-        conn.on('data', data => {
-            let message = JSON.parse(data);
-            console.log('----------- Received Message start -------------');
-            console.log(
-                'from: ' + peerId.toString('hex'),
-                'to: ' + peerId.toString(message.to),
-                'my: ' + myPeerId.toString('hex'),
-                'type: ' + JSON.stringify(message.type)
+    conn.on("data", (data) => {
+      let message = JSON.parse(data);
+      //console.log('Received', message.type, 'from', peerId);
+
+      switch (message.type) {
+        case MessageType.REQUEST_BLOCK: {
+          let requestedIndex = message.data.index;
+          let requestedBlock = chain.getBlock(requestedIndex);
+          if (requestedBlock)
+            writeMessageToPeerToId(
+              peerId,
+              MessageType.RECEIVE_NEXT_BLOCK,
+              requestedBlock
             );
-            console.log('----------- Received Message end -------------');
-
-            /* 
-              once a connection data event message is received, you can create your switch 
-              code to handle the different types of requests
-            */
-            switch (message.type) {
-                case MessageType.REQUEST_BLOCK:
-                    console.log('-----------REQUEST_BLOCK-------------');
-                    let requestedIndex = (JSON.parse(JSON.stringify(message.data))).index;
-                    let requestedBlock = chain.getBlock(requestedIndex);
-                    if (requestedBlock)
-                    writeMessageToPeerToId(peerId.toString('hex'), MessageType.RECEIVE_NEXT_BLOCK, requestedBlock);
-                    else
-                        console.log('No block found @ index: ' + requestedIndex);
-                    console.log('-----------REQUEST_BLOCK-------------');
-                    break;
-
-                case MessageType.RECEIVE_NEXT_BLOCK:
-                    console.log('-----------RECEIVE_NEXT_BLOCK-------------');
-                    chain.addBlock(JSON.parse(JSON.stringify(message.data)));
-                    console.log(JSON.stringify(chain.blockchain));
-                    let nextBlockIndex = chain.getLatestBlock().index+1;
-                    console.log('-- request next block @ index: ' + nextBlockIndex);
-                    writeMessageToPeers(MessageType.REQUEST_BLOCK, {index: nextBlockIndex});
-                    console.log('-----------RECEIVE_NEXT_BLOCK-------------');
-                    break;
-
-                case MessageType.RECEIVE_NEW_BLOCK:
-                    if ( message.to === myPeerId.toString('hex') && message.from !== myPeerId.toString('hex')) {
-                        console.log('-----------RECEIVE_NEW_BLOCK------------- ' + message.to);
-                        chain.addBlock(JSON.parse(JSON.stringify(message.data)));
-                        console.log(JSON.stringify(chain.blockchain));
-                        console.log('-----------RECEIVE_NEW_BLOCK------------- ' + message.to);
-                    }
-                    break;
-
-                case MessageType.REQUEST_ALL_REGISTER_MINERS:
-                    console.log('-----------REQUEST_ALL_REGISTER_MINERS------------- ' + message.to);
-                    writeMessageToPeers(MessageType.REGISTER_MINER, registeredMiners);
-                    registeredMiners = JSON.parse(JSON.stringify(message.data));
-                    console.log('-----------REQUEST_ALL_REGISTER_MINERS------------- ' + message.to);
-                    break;
-
-                case MessageType.REGISTER_MINER:
-                    console.log('-----------REGISTER_MINER------------- ' + message.to);
-                    let miners = JSON.stringify(message.data);
-                    registeredMiners = JSON.parse(miners);
-                    console.log(registeredMiners);
-                    console.log('-----------REGISTER_MINER------------- ' + message.to);
-                    break;
-            }
-
-        });
-
-       /*  
-         listen to a close event, which will indicate that you 
-         lost a connection with peers, so you can take action, such as delete
-         the peers from your peers ist object. 
-       */
-        conn.on('close', () => {
-           console.log(`Connection ${seq} closed, peerId: ${peerId}`);
-            if (peers[peerId].seq === seq) {
-                delete peers[peerId];
-                console.log('--- registeredMiners before: ' + JSON.stringify(registeredMiners));
-                let index = registeredMiners.indexOf(peerId);
-                if (index > -1)
-                    registeredMiners.splice(index, 1);
-                console.log('--- registeredMiners end: ' + JSON.stringify(registeredMiners));
-            }
-        });
-
-        if (!peers[peerId]) {
-            peers[peerId] = {}
+          else console.log("No block found @ index:", requestedIndex);
+          break;
         }
-        peers[peerId].conn = conn;
-        peers[peerId].seq = seq;
-        connSeq++
-    })
+        case MessageType.RECEIVE_NEXT_BLOCK: {
+          // If this block doesn't fit, likely a fork: request full chain
+          let newBlock = message.data;
+          let prevBlock = chain.getLatestBlock();
+          if (
+            prevBlock.blockHeader.merkleRoot ===
+            newBlock.blockHeader.previousBlockHeader
+          ) {
+            chain.addBlock(newBlock);
+          } else {
+            // Fork detected!
+            console.log("Possible fork detected. Requesting full chain...");
+            writeMessageToPeerToId(peerId, MessageType.REQUEST_FULL_CHAIN, {});
+          }
+          break;
+        }
+        case MessageType.RECEIVE_NEW_BLOCK: {
+          let newBlock = message.data;
+          let prevBlock = chain.getLatestBlock();
+          if (
+            prevBlock.blockHeader.merkleRoot ===
+            newBlock.blockHeader.previousBlockHeader
+          ) {
+            chain.addBlock(newBlock);
+          } else {
+            // Fork detected!
+            console.log("Possible fork detected. Requesting full chain...");
+            writeMessageToPeerToId(peerId, MessageType.REQUEST_FULL_CHAIN, {});
+          }
+          break;
+        }
+        case MessageType.REQUEST_FULL_CHAIN: {
+          // Send the full chain to the requester
+          writeMessageToPeerToId(
+            peerId,
+            MessageType.RECEIVE_FULL_CHAIN,
+            chain.blockchain
+          );
+          break;
+        }
+        case MessageType.RECEIVE_FULL_CHAIN: {
+          let receivedChain = message.data;
+          // Validate and replace if valid & longer
+          chain.replaceChain(receivedChain);
+          break;
+        }
+        case MessageType.REQUEST_ALL_REGISTER_MINERS: {
+          writeMessageToPeers(MessageType.REGISTER_MINER, registeredMiners);
+          registeredMiners = message.data;
+          break;
+        }
+        case MessageType.REGISTER_MINER: {
+          registeredMiners = message.data;
+          break;
+        }
+        // PoS: share/receive stakes
+        case MessageType.REQUEST_STAKES: {
+          writeMessageToPeerToId(peerId, MessageType.RECEIVE_STAKES, {
+            address: myAddress,
+            stake: myStake,
+          });
+          break;
+        }
+        case MessageType.RECEIVE_STAKES: {
+          // Simple: update local stakes
+          let stakeInfo = message.data;
+          if (stakes.find((s) => s.address === stakeInfo.address)) {
+            // Already present, update
+            stakes = stakes.map((s) =>
+              s.address === stakeInfo.address ? stakeInfo : s
+            );
+          } else {
+            stakes.push(stakeInfo);
+          }
+          break;
+        }
+      }
+    });
+
+    conn.on("close", () => {
+      console.log(`Connection ${seq} closed, peerId: ${peerId}`);
+      if (peers[peerId].seq === seq) {
+        delete peers[peerId];
+        let index = registeredMiners.indexOf(peerId);
+        if (index > -1) registeredMiners.splice(index, 1);
+      }
+    });
+
+    if (!peers[peerId]) {
+      peers[peerId] = {};
+    }
+    peers[peerId].conn = conn;
+    peers[peerId].seq = seq;
+    connSeq++;
+  });
 })();
 
-// writeMessageToPeers method will be sending messages to all the connected peers
-writeMessageToPeers = (type, data) => {
-    for (let id in peers) {
-        console.log('-------- writeMessageToPeers start -------- ');
-        console.log('type: ' + type + ', to: ' + id);
-        console.log('-------- writeMessageToPeers end ----------- ');
-        sendMessage(id, type, data);
-    }
-};
+// --- Messaging Helpers ---
+function writeMessageToPeers(type, data) {
+  for (let id in peers) sendMessage(id, type, data);
+}
+function writeMessageToPeerToId(toId, type, data) {
+  if (peers[toId]) sendMessage(toId, type, data);
+}
+function sendMessage(id, type, data) {
+  peers[id].conn.write(
+    JSON.stringify({
+      to: id,
+      from: myPeerId,
+      type: type,
+      data: data,
+    })
+  );
+}
 
-// writeMessageToPeerToId, that will be sending the message to a specific peer ID
-writeMessageToPeerToId = (toId, type, data) => {
-    for (let id in peers) {
-        if (id === toId) {
-            console.log('-------- writeMessageToPeerToId start -------- ');
-            console.log('type: ' + type + ', to: ' + toId);
-            console.log('-------- writeMessageToPeerToId end ----------- ');
-            sendMessage(id, type, data);
-        }
-    }
-};
-
-/* 
-   sendMessage is a generic method that we will be using to send a
-   message formatted with the params you would like to pass and includes the
-   following:
-     – to/from: The peer ID you are sending the message from and to
-     – type: The message type
-     – data: Any data you would like to share on the P2P network 
-*/
-
-sendMessage = (id, type, data) => {
-    peers[id].conn.write(JSON.stringify(
-        {
-            to: id,
-            from: myPeerId,
-            type: type,
-            data: data
-        }
-    ));
-};
-
-setTimeout(function(){
-    writeMessageToPeers(MessageType.REQUEST_ALL_REGISTER_MINERS, null);
+// Initial peer state sync
+setTimeout(() => {
+  writeMessageToPeers(MessageType.REQUEST_ALL_REGISTER_MINERS, null);
 }, 5000);
 
-// using a setTimeout function to send a message send a request to retrieve the latest block every 5 seconds
-setTimeout(function(){
-    writeMessageToPeers(MessageType.REQUEST_BLOCK, {index: chain.getLatestBlock().index+1});
+setTimeout(() => {
+  writeMessageToPeers(MessageType.REQUEST_BLOCK, {
+    index: chain.getLatestBlock().index + 1,
+  });
 }, 5000);
 
-setTimeout(function(){
-    registeredMiners.push(myPeerId.toString('hex'));
-    console.log('----------Register my miner --------------');
-    console.log(registeredMiners);
-    writeMessageToPeers(MessageType.REGISTER_MINER, registeredMiners);
-    console.log('---------- Register my miner --------------');
+setTimeout(() => {
+  registeredMiners.push(myPeerId.toString("hex"));
+  writeMessageToPeers(MessageType.REGISTER_MINER, registeredMiners);
 }, 7000);
 
+// PoS: Share stake info
+setTimeout(() => {
+  writeMessageToPeers(MessageType.REQUEST_STAKES, null);
+  // Add your own if missing
+  if (!stakes.find((s) => s.address === myAddress)) {
+    stakes.push({ address: myAddress, stake: myStake });
+  }
+}, 7000);
 
-const job = new CronJob('30 * * * * *', function() {
-    let index = 0; // first block
+// Mining/Block Production Job
+const job = new CronJob("30 * * * * *", function () {
+  let index = 0;
+  if (lastBlockMinedBy) {
+    let newIndex = registeredMiners.indexOf(lastBlockMinedBy);
+    index = newIndex + 1 > registeredMiners.length - 1 ? 0 : newIndex + 1;
+  }
 
-    // requesting next block from your next miner
-    if (lastBlockMinedBy) {
-        let newIndex = registeredMiners.indexOf(lastBlockMinedBy); 
-        index = ( newIndex+1 > registeredMiners.length-1) ? 0 : newIndex + 1;
-    }
+  lastBlockMinedBy = registeredMiners[index];
+  const consensusMode = process.env.CONSENSUS_MODE || "pow";
 
-    /*
-      To generate and add a new block, you will be calling chain
-      generateNextBlock and addBlock. Lastly, you will broadcast the new
-      block to all the connected peers.
-    */
-    lastBlockMinedBy = registeredMiners[index];
-    console.log('-- REQUESTING NEW BLOCK FROM: ' + registeredMiners[index] + ', index: ' + index);
-    console.log(JSON.stringify(registeredMiners));
-    if (registeredMiners[index] === myPeerId.toString('hex')) {
-        console.log('-----------create next block -----------------');
-        let newBlock = chain.generateNextBlock(null);
-        chain.addBlock(newBlock);
-        console.log(JSON.stringify(newBlock));
-        writeMessageToPeers(MessageType.RECEIVE_NEW_BLOCK, newBlock);
-        console.log(JSON.stringify(chain.blockchain));
-        console.log('-----------create next block -----------------');
-    }
+  // PoW: anyone can mine. PoS: only validator for this round.
+  let canMine = true;
+  if (consensusMode === "pos") {
+    // Wait for stakes to be loaded, then pick validator.
+    if (!stakes.length) return; // Wait for stake sync
+    let validator = selectValidator(stakes);
+    canMine = validator === myAddress;
+    if (!canMine) return;
+  }
+
+  if (canMine && registeredMiners[index] === myPeerId.toString("hex")) {
+    console.log("--- Creating next block ---");
+    let newBlock = chain.generateNextBlock(null, stakes);
+    chain.addBlock(newBlock);
+    writeMessageToPeers(MessageType.RECEIVE_NEW_BLOCK, newBlock);
+  }
 });
+
+// -- PoS Validator selection, same as consensus.js --
+function selectValidator(stakes) {
+  const total = stakes.reduce((sum, s) => sum + s.stake, 0);
+  const rand = Math.random() * total;
+  let cumulative = 0;
+  for (const s of stakes) {
+    cumulative += s.stake;
+    if (rand <= cumulative) return s.address;
+  }
+  return stakes[stakes.length - 1].address;
+}
+
 job.start();

@@ -1,41 +1,31 @@
 const path = require("path");
-const EC = require("elliptic").ec;
 const fs = require("fs");
-const ec = new EC("secp256k1"); // create and initialize the EC context
+const CryptoAdapter = require("./cryptoAdapter");
 
 const privateKeyDir = path.join(__dirname, "wallet");
 const privateKeyFile = path.join(privateKeyDir, "private_key");
+const publicKeyFile = path.join(privateKeyDir, "public_key");
 
-// create a method exports.initWallet to generate the actual public-private key, generatePrivateKey
-exports.initWallet = () => {
-  let privateKey;
+exports.initWallet = async () => {
+  // Generate keys only if they don't exist
+  if (!fs.existsSync(privateKeyDir)) fs.mkdirSync(privateKeyDir);
 
-  // If the directory doesn't exist, create it
-  if (!fs.existsSync(privateKeyDir)) {
-    fs.mkdirSync(privateKeyDir);
-  }
-
-  // you will be generating a new wallet only if one doesn’t exist
-  if (fs.existsSync(privateKeyFile)) {
-    const buffer = fs.readFileSync(privateKeyFile, "utf8");
-    privateKey = buffer.toString();
+  let privateKey, publicKey;
+  if (fs.existsSync(privateKeyFile) && fs.existsSync(publicKeyFile)) {
+    privateKey = fs.readFileSync(privateKeyFile);
+    publicKey = fs.readFileSync(publicKeyFile);
   } else {
-    privateKey = generatePrivateKey();
+    const keys = await CryptoAdapter.generateKeyPair();
+    privateKey = keys.privateKey;
+    publicKey = keys.publicKey;
     fs.writeFileSync(privateKeyFile, privateKey);
+    fs.writeFileSync(publicKeyFile, publicKey);
   }
 
-  const key = ec.keyFromPrivate(privateKey, "hex");
-  const publicKey = key.getPublic().encode("hex");
-  return { privateKeyLocation: privateKeyFile, publicKey: publicKey };
+  const address = CryptoAdapter.getAddress(publicKey);
+  return {
+    privateKeyLocation: privateKeyFile,
+    publicKey: publicKey.toString("hex"),
+    address,
+  };
 };
-
-const generatePrivateKey = () => {
-  const keyPair = ec.genKeyPair();
-  const privateKey = keyPair.getPrivate();
-  return privateKey.toString(16);
-};
-
-// To see the code working, script will create the public and private keys
-let wallet = this;
-let retVal = wallet.initWallet();
-console.log(JSON.stringify(retVal));

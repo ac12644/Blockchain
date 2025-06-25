@@ -1,37 +1,39 @@
-const CryptoJS = require("crypto-js");
-const EC = require("elliptic").ec;
-const ec = new EC("secp256k1");
+const CryptoAdapter = require("./cryptoAdapter");
 
 const getBalance = (address, blockchain) => {
   let balance = 0;
-  // Code to calculate balance from the blockchain's transaction history
+  // Calculate balance by iterating over all blocks and transactions
+  for (const block of blockchain) {
+    if (!block.txns) continue;
+    for (const txn of block.txns) {
+      if (txn.fromAddress === address) balance -= txn.amount;
+      if (txn.toAddress === address) balance += txn.amount;
+    }
+  }
   return balance;
 };
 
-exports.verifyTransaction = (transaction, blockchain) => {
-  // Check for the transaction structure
+exports.verifyTransaction = async (transaction, blockchain) => {
   if (
     !transaction.fromAddress ||
     !transaction.toAddress ||
-    !transaction.amount
+    typeof transaction.amount !== "number"
   ) {
     return false;
   }
 
-  // Check if the signature is valid
-  const publicKey = ec.keyFromPublic(transaction.fromAddress, "hex");
-  if (
-    !publicKey.verify(
-      CryptoJS.SHA256(
-        transaction.fromAddress + transaction.toAddress + transaction.amount
-      ).toString(),
-      transaction.signature
-    )
-  ) {
-    return false;
-  }
+  // Always construct the message in the SAME way you sign!
+  const message =
+    transaction.fromAddress + transaction.toAddress + transaction.amount;
 
-  // Check for sufficient balance (this requires a function to calculate the balance)
+  // Pluggable crypto (classic or PQC) verification
+  const valid = await CryptoAdapter.verify(
+    message,
+    transaction.signature,
+    transaction.fromAddress
+  );
+  if (!valid) return false;
+
   if (getBalance(transaction.fromAddress, blockchain) < transaction.amount) {
     return false;
   }
